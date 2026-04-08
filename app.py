@@ -1,84 +1,184 @@
 import streamlit as st
-import json
-import math
 import pandas as pd
+from data_manager import load_data, save_data
+from calc_engine import calculate_sequence
 
-# 1. 페이지 설정
-st.set_page_config(page_title="Robot Cycle Time Predictor", layout="wide")
+st.set_page_config(page_title="취출기 사이클 타임 예측", layout="wide")
 st.title("🤖 취출기 사이클 타임 예측 프로그램")
-
-# 2. 데이터 로드 (백데이터)
-def load_data():
-    with open('robot_data.json', 'r') as f:
-        return json.load(f)
 
 robot_db = load_data()
 
-# 3. 사이클 타임 계산 함수
-def calculate_move_time(dist, spec):
-    if dist <= 0: return 0
-    a, v = spec['acc'], spec['vel']
-    d_acc = (v**2) / (2 * a)
-    
-    if dist >= 2 * d_acc:
-        return (v / a) * 2 + (dist - 2 * d_acc) / v
-    else:
-        return 2 * math.sqrt(dist / a)
+tab1, tab2, tab3 = st.tabs(["사이클 계산", "기종 사양 관리", "결과 분석"])
 
-# 4. 사이드바: 기종 선택 및 정보 확인
-st.sidebar.header("⚙️ 기종 설정")
-selected_model = st.sidebar.selectbox("취출기 기종 선택", list(robot_db.keys()))
-specs = robot_db[selected_model]
+# ---------------------------
+# 탭 1: 사이클 계산
+# ---------------------------
+with tab1:
+    st.subheader("공정 입력")
 
-with st.sidebar.expander("선택 기종 상세 사양"):
-    st.json(specs)
+    selected_model = st.selectbox("취출기 기종 선택", list(robot_db.keys()))
+    specs = robot_db[selected_model]
 
-# 5. 메인 화면: 공정 입력 섹션
-st.subheader(f"📍 {selected_model} 공정 시퀀스 입력")
+    with st.expander("선택 기종 축 사양 보기"):
+        st.json(specs)
 
-# 세션 상태를 이용한 공정 리스트 관리
-if 'rows' not in st.session_state:
-    st.session_state.rows = [{"name": "금형진입(Z)", "axis": "Z", "dist": 500.0, "delay": 0.1, "is_takeout": True}]
+    default_row = {
+        "name": "금형진입",
+        "axis": "Z",
+        "dist": 500.0,
+        "delay": 0.1,
+        "is_takeout": True,
+        "group": 1
+    }
 
-def add_row():
-    st.session_state.rows.append({"name": "신규공정", "axis": "X", "dist": 0.0, "delay": 0.0, "is_takeout": False})
+    if "rows" not in st.session_state:
+        st.session_state.rows = [default_row.copy()]
 
-# 공정 입력 테이블 구성
-input_data = []
-for i, row in enumerate(st.session_state.rows):
-    cols = st.columns([2, 1, 1, 1, 1])
-    name = cols[0].text_input(f"공정명 #{i+1}", value=row['name'], key=f"name_{i}")
-    axis = cols[1].selectbox(f"축 #{i+1}", ["X", "Y", "Z", "R1", "R2"], index=["X", "Y", "Z", "R1", "R2"].index(row['axis']), key=f"axis_{i}")
-    dist = cols[2].number_input(f"이동거리(mm) #{i+1}", value=row['dist'], key=f"dist_{i}")
-    delay = cols[3].number_input(f"딜레이(s) #{i+1}", value=row['delay'], key=f"delay_{i}")
-    is_takeout = cols[4].checkbox(f"취출구간 #{i+1}", value=row['is_takeout'], key=f"takeout_{i}")
-    input_data.append({"name": name, "axis": axis, "dist": dist, "delay": delay, "is_takeout": is_takeout})
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("➕ 공정 추가"):
+            next_group = len(st.session_state.rows) + 1
+            st.session_state.rows.append({
+                "name": f"신규공정{next_group}",
+                "axis": "X",
+                "dist": 0.0,
+                "delay": 0.0,
+                "is_takeout": False,
+                "group": next_group
+            })
 
-st.button("➕ 공정 추가", on_click=add_row)
+    with col_btn2:
+        if st.button("🗑 마지막 공정 삭제") and len(st.session_state.rows) > 1:
+            st.session_state.rows.pop()
 
-# 6. 계산 및 결과 전시
-takeout_time = 0
-total_time = 0
-results = []
+    input_rows = []
+    axis_options = list(specs.keys())
 
-for item in input_data:
-    move_t = calculate_move_time(item['dist'], specs[item['axis']])
-    step_t = move_t + item['delay']
-    
-    if item['is_takeout']:
-        takeout_time += step_t
-    total_time += step_t
-    
-    results.append({
-        "공정": item['name'],
-        "이동시간(s)": round(move_t, 3),
-        "총 소요(s)": round(step_t, 3)
-    })
+    st.markdown("### 공정 시퀀스")
+    for i, row in enumerate(st.session_state.rows):
+        cols = st.columns([2.2, 1, 1.1, 1, 0.8, 0.8])
+        name = cols[0].text_input(f"공정명 #{i+1}", value=row["name"], key=f"name_{i}")
+        axis = cols[1].selectbox(
+            f"축 #{i+1}",
+            axis_options,
+            index=axis_options.index(row["axis"]) if row["axis"] in axis_options else 0,
+            key=f"axis_{i}"
+        )
+        dist = cols[2].number_input(f"이동거리(mm) #{i+1}", min_value=0.0, value=float(row["dist"]), step=10.0, key=f"dist_{i}")
+        delay = cols[3].number_input(f"딜레이(s) #{i+1}", min_value=0.0, value=float(row["delay"]), step=0.01, key=f"delay_{i}")
+        is_takeout = cols[4].checkbox(f"취출 #{i+1}", value=row["is_takeout"], key=f"takeout_{i}")
+        group = cols[5].number_input(f"그룹 #{i+1}", min_value=1, value=int(row["group"]), step=1, key=f"group_{i}")
 
-# 결과 대시보드
-st.divider()
-c1, c2 = st.columns(2)
-c1.metric("⏱ 예상 취출 시간 (Take-out)", f"{takeout_time:.2f} s")
-c2.metric("🔄 전체 사이클 타임 (Total)", f"{total_time:.2f} s")
+        input_rows.append({
+            "name": name,
+            "axis": axis,
+            "dist": dist,
+            "delay": delay,
+            "is_takeout": is_takeout,
+            "group": group
+        })
 
-st.table(pd.DataFrame(results))
+    st.session_state.rows = input_rows
+
+    if st.button("📊 계산 실행", type="primary"):
+        try:
+            result = calculate_sequence(input_rows, specs)
+
+            st.divider()
+            c1, c2 = st.columns(2)
+            c1.metric("⏱ 예상 취출 시간", f"{result['takeout_time']:.3f} s")
+            c2.metric("🔄 전체 사이클 타임", f"{result['total_time']:.3f} s")
+
+            st.markdown("### 공정별 결과")
+            df_rows = pd.DataFrame(result["rows"])
+            df_rows = df_rows.rename(columns={
+                "idx": "No",
+                "name": "공정명",
+                "axis": "축",
+                "dist": "이동거리(mm)",
+                "delay": "딜레이(s)",
+                "is_takeout": "취출여부",
+                "group": "동시이동그룹",
+                "move_time": "이동시간(s)",
+                "step_time": "총시간(s)"
+            })
+            st.dataframe(df_rows, use_container_width=True)
+
+            st.markdown("### 그룹별 결과")
+            df_groups = pd.DataFrame(result["groups"])
+            df_groups = df_groups.rename(columns={
+                "group": "그룹",
+                "count": "공정수",
+                "group_time": "그룹총시간(s)",
+                "takeout_group_time": "취출그룹시간(s)"
+            })
+            st.dataframe(df_groups, use_container_width=True)
+
+            csv = df_rows.to_csv(index=False).encode("utf-8-sig")
+            st.download_button("결과 CSV 다운로드", data=csv, file_name="cycle_time_result.csv", mime="text/csv")
+
+        except Exception as e:
+            st.error(f"계산 중 오류 발생: {e}")
+
+
+# ---------------------------
+# 탭 2: 기종 사양 관리
+# ---------------------------
+with tab2:
+    st.subheader("기종 백데이터 관리")
+
+    manage_model = st.selectbox("수정할 기종", list(robot_db.keys()), key="manage_model")
+    model_data = robot_db[manage_model]
+
+    edited = {}
+
+    for axis_name, axis_spec in model_data.items():
+        st.markdown(f"#### 축 {axis_name}")
+        c1, c2, c3 = st.columns(3)
+        acc = c1.number_input(f"{axis_name} 가속도", min_value=0.0, value=float(axis_spec["acc"]), key=f"{manage_model}_{axis_name}_acc")
+        dec = c2.number_input(f"{axis_name} 감속도", min_value=0.0, value=float(axis_spec["dec"]), key=f"{manage_model}_{axis_name}_dec")
+        vel = c3.number_input(f"{axis_name} 속도", min_value=0.0, value=float(axis_spec["vel"]), key=f"{manage_model}_{axis_name}_vel")
+        edited[axis_name] = {"acc": acc, "dec": dec, "vel": vel}
+
+    if st.button("사양 저장"):
+        robot_db[manage_model] = edited
+        save_data(robot_db)
+        st.success("기종 사양이 저장되었습니다.")
+
+    st.divider()
+    st.markdown("### 신규 기종 추가")
+    new_model_name = st.text_input("신규 기종명")
+    if st.button("신규 기종 생성"):
+        if not new_model_name.strip():
+            st.warning("기종명을 입력하세요.")
+        elif new_model_name in robot_db:
+            st.warning("이미 존재하는 기종명입니다.")
+        else:
+            robot_db[new_model_name] = {
+                "X": {"acc": 3000, "dec": 3000, "vel": 1500},
+                "Y": {"acc": 3000, "dec": 3000, "vel": 1500},
+                "Z": {"acc": 3000, "dec": 3000, "vel": 1500},
+                "R": {"acc": 1000, "dec": 1000, "vel": 800},
+                "S": {"acc": 1000, "dec": 1000, "vel": 800}
+            }
+            save_data(robot_db)
+            st.success(f"{new_model_name} 기종이 생성되었습니다.")
+
+
+# ---------------------------
+# 탭 3: 결과 분석 안내
+# ---------------------------
+with tab3:
+    st.subheader("분석 포인트")
+    st.markdown("""
+    - 취출시간: 취출구간으로 체크된 공정만 합산
+    - 전체시간: 전체 그룹 기준 합산
+    - 같은 그룹 번호는 동시 이동으로 처리되어 가장 오래 걸리는 공정 시간이 반영됨
+    - 실제 설비와 차이가 있다면 아래 항목 추가 보정 필요:
+      - 금형 개폐 시간
+      - 파지/탈착 시간
+      - 진공 응답 시간
+      - 에어블로우 시간
+      - 안전 보정 시간
+      - 컨트롤러 응답 지연
+    """)
