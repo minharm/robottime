@@ -1,0 +1,26 @@
+name: Robot Calc Run
+
+on:
+  push:
+    branches: [ "main" ]  # 코드가 업데이트될 때마다 실행
+  workflow_dispatch:      # 사용자가 수동으로 실행 버튼을 누를 때 실행
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        pip install pandas  # streamlit 없이 로직만 계산할 경우
+
+    - name: Run calculation
+      run: |
+        python app.py  # 단, app.py가 UI 없이도 돌아가도록 설계되어야 함
